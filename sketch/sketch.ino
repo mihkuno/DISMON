@@ -1,92 +1,139 @@
 #include <EEPROM.h>
-#include <GravityTDS.h>
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
 
+// Pin configuration
 #define ACID_PIN A1    // pH sensor pin
 #define TURB_PIN A2    // Turbidity sensor pin
 #define TDS_PIN A3     // TDS sensor pin
 
+// Constants for ADC and voltage reference
 #define VREF 5.0
-#define ADC_RES 1024
+#define ADC_RES 1023.0
 
-float acid_val = 0;
-float turb_val = 0;
-float tds_val = 0;  // TDS value in PPM
-
-LiquidCrystal_I2C lcd(0x27, 16, 2); // Set the LCD address to 0x27 or 0x3F for a 16 chars and 2-line display
-GravityTDS tds;
+// Initialize LCD instances with known I2C addresses
+LiquidCrystal_I2C lcd4(0x27, 16, 2);
 
 void setup() {
-    pinMode(TURB_PIN, INPUT);
-    pinMode(TDS_PIN, INPUT);
-    pinMode(ACID_PIN, INPUT);
+  Serial.begin(9600); // Start serial communication for debugging
+  Wire.begin(); // Initialize I2C bus
+  
+  pinMode(TURB_PIN, INPUT);
+  pinMode(TDS_PIN, INPUT);
+  pinMode(ACID_PIN, INPUT);
 
-    lcd.init();                // Initialize the LCD
-    lcd.backlight();          // Turn on the backlight
+  if (initializeLCD(0x27, lcd4)) {
+    lcd4.setCursor(0, 0);
+    lcd4.print("Device 4 ready");
+  }
 
-    tds.setPin(TDS_PIN);      // Set TDS sensor pin
-    tds.setAref(VREF);        // Set analog reference voltage
-    tds.setAdcRange(ADC_RES); // Set ADC resolution for Arduino Uno (10-bit ADC)
-    tds.begin();              // Initialize TDS sensor
+  delay(1000); // Display readiness message for 1 second
+  lcd4.clear();
 }
 
-float readPH() {
-    int buffer_arr[10];
-    unsigned long avgval = 0;
 
-    // Read analog values into the buffer
-    for (int i = 0; i < 10; i++) {
-        buffer_arr[i] = analogRead(ACID_PIN);
-        delay(30); // Delay for stabilization
+// use the given data to map the analog values to PPM (Parts Per Million) values using a linear relationship.
+// TEMP	ANALOG	PPM	  DESC
+// 25	  510	    792	  salt
+// 25	  5	      0	    none 
+// 25	  318	    575	  sewage
+float analogToPPM(int analogValue) {
+    // Calibration data
+    int analogVals[] = {5, 318, 510};  // Analog readings
+    int ppmVals[] = {0, 575, 792};    // Corresponding PPM values
+    int numPoints = 3;                // Number of calibration points
+
+    // Check if the value is outside the calibration range
+    if (analogValue <= analogVals[0]) {
+        return ppmVals[0];
+    } 
+    if (analogValue >= analogVals[numPoints - 1]) {
+        return ppmVals[numPoints - 1];
     }
 
-    // Sort buffer array
-    for (int i = 0; i < 9; i++) {
-        for (int j = i + 1; j < 10; j++) {
-            if (buffer_arr[i] > buffer_arr[j]) {
-                int temp = buffer_arr[i];
-                buffer_arr[i] = buffer_arr[j];
-                buffer_arr[j] = temp;
-            }
+    // Interpolation between two calibration points
+    for (int i = 0; i < numPoints - 1; i++) {
+        if (analogValue >= analogVals[i] && analogValue <= analogVals[i + 1]) {
+            // Linear interpolation
+            return ppmVals[i] + 
+                   (float)(analogValue - analogVals[i]) * 
+                   (ppmVals[i + 1] - ppmVals[i]) / 
+                   (analogVals[i + 1] - analogVals[i]);
         }
     }
 
-    // Calculate average of middle values
-    for (int i = 2; i < 8; i++) {
-        avgval += buffer_arr[i];
-    }
-
-    float volt = (float)avgval * VREF / ADC_RES / 6; // Convert to voltage
-    return volt; 
+    // Default return value (shouldn't reach here if data is correct)
+    return 0;
 }
 
+
 void loop() {
-    // Update TDS data
-    tds.update();
-    tds_val = tds.getTdsValue(); // Get TDS value in PPM
+  // Read TDS data
+  int tdsAnalogValue = analogRead(TDS_PIN); // Get raw analog value from TDS sensor
+  float tdsVoltage = (tdsAnalogValue / ADC_RES) * VREF; // Convert raw ADC value to voltage
+  int ppmValue = analogToPPM(tdsAnalogValue);
 
-    // Read turbidity
-    turb_val = analogRead(TURB_PIN);
-    turb_val *= (VREF / ADC_RES); // Convert to voltage
-    
-    // Read pH value using the separate function
-    acid_val = readPH();
+  // Read turbidity
+  int turbAnalogValue = analogRead(TURB_PIN);
+  float turbVoltage = (turbAnalogValue / ADC_RES) * VREF; // Convert to voltage
+  turbVoltage = map(turbVoltage, 0, 4.45, 100, 0);
 
-    // Clear LCD and display readings
-    lcd.clear();
-    lcd.setCursor(0, 0);
+  // Read acidity
+  int acidValue = (int)analogRead(ACID_PIN);
+  
+  lcd4.print(String(acidValue) + " PH");
+  lcd4.setCursor(11, 0);
+  lcd4.print(String((int)turbVoltage) + " %"); 
+  lcd4.setCursor(0, 1);
+  lcd4.print(String(ppmValue) + " PPM"); 
 
-    // Display Turbidity and pH on the first line
-    lcd.print("TB ");
-    lcd.print(turb_val, 2); // Display turbidity voltage
-    lcd.print(" PH ");
-    lcd.print(acid_val, 2);   // Display pH value
+  delay(300);
+  lcd4.clear();
+}
 
-    // Move to the second line and display TDS and temperature
-    lcd.setCursor(0, 1);
-    lcd.print("TD ");
-    lcd.print(tds_val); // Display TDS value in PPM
+// Function to check and initialize an LCD at a specific I2C address
+bool initializeLCD(byte address, LiquidCrystal_I2C &lcd) {
+  Wire.beginTransmission(address);
+  if (Wire.endTransmission() == 0) { // Device found
+    lcd.init();        // Initialize the LCD
+    lcd.backlight();   // Turn on the backlight
+    Serial.print("LCD found at 0x");
+    Serial.println(address, HEX);
+    return true;       // Initialization successful
+  } else {
+    Serial.print("No device found at 0x");
+    Serial.println(address, HEX);
+    return false;      // No device at this address
+  }
+}
 
-    delay(1000); // Delay for stability before the next reading
+// Function to read pH sensor and calculate average voltage
+float readPH() {
+  int buffer_arr[10];
+  unsigned long avgval = 0;
+
+  // Read analog values into the buffer
+  for (int i = 0; i < 10; i++) {
+    buffer_arr[i] = analogRead(ACID_PIN);
+    delay(30); // Delay for stabilization
+  }
+
+  // Sort buffer array
+  for (int i = 0; i < 9; i++) {
+    for (int j = i + 1; j < 10; j++) {
+      if (buffer_arr[i] > buffer_arr[j]) {
+        int temp = buffer_arr[i];
+        buffer_arr[i] = buffer_arr[j];
+        buffer_arr[j] = temp;
+      }
+    }
+  }
+
+  // Calculate average of middle values
+  for (int i = 2; i < 8; i++) {
+    avgval += buffer_arr[i];
+  }
+
+  float volt = (float)avgval * VREF / ADC_RES / 6; // Convert to voltage
+  return volt; 
 }

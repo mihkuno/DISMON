@@ -79,7 +79,7 @@ void loop() {
   turbVoltage = map(turbVoltage, 0, 4.45, 100, 0);
 
   // Read acidity
-  int acidValue = (int)analogRead(ACID_PIN);
+  float acidValue = analogToPh(analogRead(ACID_PIN));
   
   lcd4.print(String(acidValue) + " PH");
   lcd4.setCursor(11, 0);
@@ -107,33 +107,18 @@ bool initializeLCD(byte address, LiquidCrystal_I2C &lcd) {
   }
 }
 
-// Function to read pH sensor and calculate average voltage
-float readPH() {
-  int buffer_arr[10];
-  unsigned long avgval = 0;
 
-  // Read analog values into the buffer
-  for (int i = 0; i < 10; i++) {
-    buffer_arr[i] = analogRead(ACID_PIN);
-    delay(30); // Delay for stabilization
-  }
+float analogToPh(int x) {
+  // Define the slope (m) and intercept (b)
+  float m = -0.0286; // Slope
+  float b = 24.163;  // Intercept
 
-  // Sort buffer array
-  for (int i = 0; i < 9; i++) {
-    for (int j = i + 1; j < 10; j++) {
-      if (buffer_arr[i] > buffer_arr[j]) {
-        int temp = buffer_arr[i];
-        buffer_arr[i] = buffer_arr[j];
-        buffer_arr[j] = temp;
-      }
-    }
-  }
+  // Apply the formula: y = mx + b
+  float y = m * x + b;
 
-  // Calculate average of middle values
-  for (int i = 2; i < 8; i++) {
-    avgval += buffer_arr[i];
-  }
-
-  float volt = (float)avgval * VREF / ADC_RES / 6; // Convert to voltage
-  return volt; 
+  return y;
 }
+
+
+
+
